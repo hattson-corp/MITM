@@ -3,6 +3,8 @@ import time
 import threading
 import sys
 import argparse
+from scapy.all import *
+from scapy.utils import *
 import hexdump # pip3 install simple-hexdump
 class TCP_Proxy:
     def __init__(self):
@@ -203,34 +205,31 @@ class My_TCPProxy:
                     if data :
                         remote_buffer += data
                     if not data :
-                        client.send(bytes(remote_buffer.encode()))
-                        print("[*] Remote buffer :" ,self.hexdump(bytes(remote_buffer.encode())))
+                        client.send(remote_buffer)
+                        print("[*] Remote buffer :" ,self.hexdump(bytes(remote_buffer)))
                         break
-        while True :
-            if not self.receive_first:
-                remote_buffer = self.rcv_from(remote)
-                if len(remote_buffer):
-                    while True:
-                        data = self.rcv_from(remote)
-                        if data:
-                            remote_buffer += data
-                        if not data:
-                            client.send(bytes(remote_buffer.encode()))
-                            print("[*] Remote buffer :" ,self.hexdump(bytes(remote_buffer.encode())))
-                            break
+        while True:
+            remote_buffer = self.rcv_from(remote)
+            if len(remote_buffer):
+                data = self.rcv_from(remote)
+                if data:
+                    remote_buffer += data
+                if not data:
+                    client.send(remote_buffer)
+                    print("[*] Remote buffer :" ,self.hexdump(remote_buffer))
+
             local_buffer = self.rcv_from(client)
             if len(local_buffer):
-                while True:
-                    data = self.rcv_from(client)
-                    if data:
-                        local_buffer += data
-                    if not data :
-                        remote.send(bytes(local_buffer.encode()))
-                        print("[*] Local buffer :" ,self.hexdump(bytes(local_buffer.encode())))
-                        break
+                data = self.rcv_from(client)
+                if data:
+                    local_buffer += data
+                if not data :
+                    remote.send(local_buffer)
+                    print("[*] Local buffer :" ,self.hexdump(local_buffer))
+                    
     def rcv_from(self, connection):
         buffer = b''
-        connection.settimeout(2)
+        connection.settimeout(3)
         try:
             while True:
                 data = connection.recv(4096)
@@ -239,10 +238,94 @@ class My_TCPProxy:
                 buffer += data
         except:
             pass
-        return buffer.decode()
+        return buffer
     def run(self):
         self.server_looop()
 
 
-test = My_TCPProxy()
-test.run()
+# test = My_TCPProxy()
+# test.run()
+
+class TCP_Proxt_v_2:
+    def __init__(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-l", "--localhost", help="Local host like 127.0.0.1 .", required=True, type=str)
+        parser.add_argument("-p", "--localport", help="Local port like 1515 .", required=True, type=int)
+        parser.add_argument("-r", "--remotehost", help="Remote host like 1.1.1.1 . ", required=True , type=str)
+        parser.add_argument("-e", "--remoteport", help="Remote port like 1616", required=True, type=int)
+        parser.add_argument("-f", "--recvfirst", help="use this option to set the program to listen first ", action="store_true")
+        args = parser.parse_args()
+        self.local_host = args.localhost
+        self.local_port = args.localport
+        self.remote_host = args.remotehost
+        self.remote_port = args.remoteport
+        self.receive_first = args.recvfirst
+
+    def server_loop(self):
+        server_soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        try:
+            server_soc.bind((self.local_host, self.local_port))
+            print(f"[*] Listening on local port  {self.local_port} ...")
+        except:
+            print(f"[X] Failed listening on local port {self.local_port} !")
+            sys.exit(0)
+
+        server_soc.listen(100)
+
+        while True:
+            client_soc, addr = server_soc.accept()
+
+            print(f"[+] Incoming connected from {addr[0]}:{addr[1]}")
+            tmp_thread = threading.Thread(target=self.proxy_handler, args=[client_soc,])
+            tmp_thread.start()
+
+
+    def proxy_handler(self, client_sock):
+        remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            remote_sock.connect((self.remote_host, self.remote_port))
+        except:
+            print(f"[X] Failed to connect to the remote host and prot {self.remote_host}:{self.remote_port}")
+            sys.exit(0)
+
+        while True:
+            local_buffer = self.receive_from(client_sock)
+            self.hexdump(local_buffer)
+            if len(local_buffer):
+                remote_sock.send(local_buffer)
+            remote_buffer = self.receive_from(remote_sock)
+            self.hexdump(remote_buffer)
+            if len(remote_buffer):
+                client_sock.send(remote_buffer)
+            if not len(local_buffer) and not len(remote_buffer):
+                print("[*] No data to transfer , terminating the connection ..")
+                break
+
+
+    def hexdump(self, data, length=16):
+        for i in range(0, len(data), length):
+            chunk = data[i:i + length]
+            hexa = ' '.join(f'{byte:02X}' for byte in chunk)
+            text = ''.join(chr(byte) if 0x20 <= byte < 0x7F else '.' for byte in chunk)
+            out = open("outfile.txt", "a+")
+            out.write(f"{i:04X}   {hexa.ljust(length * 3)}   {text}\n")
+            print(f'{i:04X}   {hexa.ljust(length * 3)}   {text}')
+
+    def receive_from(self, connection):
+        data = b''
+        connection.settimeout(2)
+
+        try:
+            while True:
+                buffer = connection.recv(4096)
+                if not len(buffer):
+                    break
+                data += buffer
+        except:
+            pass
+        return data
+    def run(self):
+        self.server_loop()
+v2 = TCP_Proxt_v_2()
+v2.run()
